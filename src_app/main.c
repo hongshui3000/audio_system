@@ -18,17 +18,17 @@
 
 
 
-#if 0
+#if 1
 
 FILE * pout_file = NULL;
-void * amrtopcm(void * arg,void * user)
+void * amrtopcm(void * arg,unsigned int length,void * user)
 {
 	if(NULL == arg )
 	{
 		dbg_printf("this is null ! \n");
 		return(NULL);
 	}
-	fwrite(arg, (size_t)1, 160*2, pout_file);
+	fwrite(arg, 1, length, pout_file);
 
 	return(NULL);
 }
@@ -41,24 +41,32 @@ int main(void)
 	dbg_printf("this is a  test ! \n");
 
 	
-	ret = amr_decode_init();
+	ret = amr_decodelib_open();
 	if(ret != 0)
 	{
-		dbg_printf("amr_decode_init  fail ! \n");
+		dbg_printf("amr_decodelib_open  fail ! \n");
 		return(-1);
+	}
+
+	amr_decode_handle_t * new_handle = amr_new_decode(1,16,8000,AMR_MR515_HEADER);
+	if(NULL ==  new_handle)
+	{
+		dbg_printf("amr_new_decode  fail ! \n");
+		return(-2);
+
 	}
 
 
 
-	pout_file = fopen("./hellotest_pcm","w+");
+	pout_file = fopen("./hello_new_test_pcm","w+");
 	if(NULL == pout_file)
 	{
 		dbg_printf("open fail ! \n");
 		return (-1);
 
 	}
-#if 0
-	amr_file_amrtopcm(amrtopcm,pout_file,"./test.amr");
+#if 1
+	amr_file_amrtopcm(new_handle,amrtopcm,pout_file,"./test.amr");
 #else
 
 	unsigned char amr_buff[1024*2];
@@ -72,7 +80,7 @@ int main(void)
 	read_length = fread(amr_buff,1,1024*2,arm_file);
 	fclose(arm_file);
 	arm_file = NULL;
-	amr_buff_amrtopcm(amrtopcm,NULL,0x0C,amr_buff,read_length);
+	amr_buff_amrtopcm(new_handle,amrtopcm,NULL,amr_buff,read_length);
 
 #endif
 	
@@ -88,7 +96,7 @@ int main(void)
 #endif
 
 
-#if 1
+#if 0
 
 
 

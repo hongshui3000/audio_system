@@ -17,10 +17,31 @@ enum arm_header_mode
 
 };
 
+typedef  struct amr_decode_handle
+{
+	void * handle;
+	unsigned char channels;
+	unsigned int bitsPerSample;
+	unsigned int sample_rate;
+	enum arm_header_mode  mode;
 
-int amr_decode_init(void);
-int amr_file_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,const unsigned char * path);
-int amr_buff_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,unsigned char header_mode,unsigned char * buff,unsigned int length );
+}amr_decode_handle_t;
+
+
+
+
+typedef void * (*pfun_arm_decode)(void *data,unsigned int length,void * puser);
+
+
+int amr_decodelib_open(void);
+int amr_decodelib_close(void);
+void * amr_new_decode(unsigned char channels,unsigned int bitsPerSample,unsigned int sample_rate,enum arm_header_mode  mode);
+void amr_free_dehandle(amr_decode_handle_t * decode_handle);
+int amr_file_amrtopcm(amr_decode_handle_t  * pamr_decode,pfun_arm_decode pfun,void * user,const unsigned char * path);
+int amr_buff_amrtopcm(amr_decode_handle_t  * pamr_decode,pfun_arm_decode pfun,void * user,unsigned char * buff,unsigned int length );
+
+
+
 
 
 #endif

@@ -19,73 +19,82 @@
 #define AMR_FILE_MAGIC	"#!AMR\n"
 
 
-#define  SAMPLE_RATE		(8000)
-#define  AMR_FRAME_SIZE		(160)   /*SAMPLE_RATE*0.02*/
+static volatile int amr_decode_lib = 0;
 
 
-typedef  struct amr_decode_handle
+int amr_decodelib_open(void)
 {
-	void * handle;
-
-}amr_decode_handle_t;
-
-
-
-
-
-static amr_decode_handle_t  * pamr_decode = NULL; 
-
-/*如果需要，修改成完全重入的模式malloc + 句柄*/
-int amr_decode_init(void)
-{
-
 	int ret = -1;
-	if(NULL !=  pamr_decode)
+	if(0  != amr_decode_lib)
 	{
-		dbg_printf("has been init ! \n");
+		dbg_printf("the lib has been init ! \n");
 		return(-1);
 	}
 
-	pamr_decode = calloc(1,sizeof(*pamr_decode));
-	if(NULL == pamr_decode)
-	{
-		dbg_printf("calloc fail ! \n");
-		return(-2);
-	}
-	
-	pamr_decode->handle = NULL;
-	
 	ret = loadlib_amrdec_init();
-	if(ret != 0 )
+	if(0 == ret)
 	{
-		dbg_printf("loadlib_amrdec_init fail ! \n");
-		goto fail;
+		amr_decode_lib = 1;	
 	}
-
-	
-	pamr_decode->handle = Decoder_Interface_init();
-	if(NULL == pamr_decode->handle)
-	{
-		dbg_printf("Decoder_Interface_init  fail ! \n");
-		goto fail;
-	}
-
-	return(0);
-
-
-fail:
-
-	if(NULL != pamr_decode)
-	{
-		free(pamr_decode);
-		pamr_decode = NULL;
-
-	}
-	loadlib_amrdec_deinit();
-	return(-1);
+	return(ret);
 }
 
 
+int amr_decodelib_close(void)
+{
+	loadlib_amrdec_deinit();
+	amr_decode_lib = 0;
+
+	return(0);
+}
+
+
+
+void * amr_new_decode(unsigned char channels,unsigned int bitsPerSample,unsigned int sample_rate,enum arm_header_mode  mode)
+{
+
+	if(0 == amr_decode_lib)
+	{
+		dbg_printf("please init the amr_encode_lib ! \n");
+		return(NULL);
+	}
+	amr_decode_handle_t * new_handle = calloc(1,sizeof(amr_decode_handle_t));
+	if(NULL == new_handle)
+	{
+		dbg_printf("calloc is fail ! \n");
+		return(NULL);
+	}
+
+	new_handle->channels = channels;
+	new_handle->bitsPerSample = bitsPerSample;
+	new_handle->sample_rate = sample_rate;
+	new_handle->mode = mode; 
+
+	new_handle->handle = Decoder_Interface_init();
+	if(NULL == new_handle->handle)
+	{
+		dbg_printf("Decoder_Interface_init fail ! \n");
+		return(NULL);
+	}
+
+	return(new_handle);
+	
+}
+
+
+void amr_free_dehandle(amr_decode_handle_t * decode_handle)
+{
+	if(NULL != decode_handle)
+	{
+		if(NULL != decode_handle->handle)
+		{
+			Decoder_Interface_exit(decode_handle->handle);
+			decode_handle->handle = NULL;
+		}
+		free(decode_handle);
+		decode_handle = NULL;
+	}
+}
 
 
 static int arm_get_frame_size(enum arm_header_mode mode)
@@ -107,7 +116,7 @@ static int arm_get_frame_size(enum arm_header_mode mode)
 
 }
 
-int amr_file_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,const unsigned char * path)
+int amr_file_amrtopcm(amr_decode_handle_t  * pamr_decode,pfun_arm_decode pfun,void * user,const unsigned char * path)
 {
 
 	amr_decode_handle_t * phandle = pamr_decode;
@@ -166,8 +175,10 @@ int amr_file_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,const
 	}
 	fseek(pamr_file,6,SEEK_SET);
 
+	int pcm_frame_szie = 0;
+	pcm_frame_szie = phandle->sample_rate / 50;
 	unsigned char amr_data[frame_size];
-	unsigned char out_buff[AMR_FRAME_SIZE*2];
+	unsigned char out_buff[pcm_frame_szie*2];
 
 	while(! feof(pamr_file))
 	{
@@ -184,7 +195,7 @@ int amr_file_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,const
 		Decoder_Interface_Decode(phandle->handle, amr_data, (short*) out_buff, 0);
 		if(NULL != pfun)
 		{
-			pfun(out_buff,user);
+			pfun(out_buff,pcm_frame_szie*2,user);
 		}
 	}
 
@@ -197,7 +208,7 @@ int amr_file_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,const
 
 
 
-int amr_buff_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,unsigned char header_mode,unsigned char * buff,unsigned int length )
+int amr_buff_amrtopcm(amr_decode_handle_t  * pamr_decode,pfun_arm_decode pfun,void * user,unsigned char * buff,unsigned int length )
 {
 
 	amr_decode_handle_t * phandle = pamr_decode;
@@ -213,19 +224,21 @@ int amr_buff_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,unsig
 		return(-2);
 	}
 	
-	unsigned int frame_size = arm_get_frame_size(header_mode);
+	unsigned int frame_size = arm_get_frame_size(phandle->mode);
 	if(0 == frame_size)
 	{
 		dbg_printf("check the  amr mode ! \n");
 		return(-3);
 	}
 
+	int pcm_frame_szie = 0;
+	pcm_frame_szie = phandle->sample_rate / 50;
 	unsigned char amr_data[frame_size];
-	unsigned char out_buff[AMR_FRAME_SIZE*2];
+	unsigned char out_buff[pcm_frame_szie*2];
 	unsigned int read_length = 0;
 	while(read_length <=  length)
 	{
-		if(buff[read_length] != header_mode)
+		if(buff[read_length] != phandle->mode)
 		{
 			read_length +=  1;
 			continue;
@@ -237,7 +250,7 @@ int amr_buff_amrtopcm(void * (*pfun)(void * buff,void * puser),void * user,unsig
 			Decoder_Interface_Decode(phandle->handle, amr_data, (short*) out_buff, 0);
 			if(NULL != pfun)
 			{
-				pfun(out_buff,user);
+				pfun(out_buff,pcm_frame_szie*2,user);
 			}
 		}
 	}

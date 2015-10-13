@@ -78,7 +78,7 @@ void * amr_new_encode(unsigned char channels,unsigned int bitsPerSample,unsigned
 }
 
 
-void amr_free_handle(amr_encode_handle_t * encode_handle)
+void amr_free_enhandle(amr_encode_handle_t * encode_handle)
 {
 	if(NULL != encode_handle)
 	{
