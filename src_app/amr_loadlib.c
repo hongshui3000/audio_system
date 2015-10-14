@@ -8,6 +8,7 @@
 #include "common.h"
 
 
+
 #undef  	DBG_ON
 #undef  	FILE_NAME
 #define 	DBG_ON  	(0x01)
@@ -24,7 +25,7 @@ static  Encoder_Interface_init_pfun  Encoder_Interface_init_amr = NULL;
 static  Encoder_Interface_exit_pfun	 Encoder_Interface_exit_amr = NULL;
 static  Encoder_Interface_Encode_pfun  Encoder_Interface_Encode_amr = NULL;
 
-#define	 AMR_ENC_LIB		"../amr_lib/libamr_enc.so"
+#define	 AMR_ENC_LIB		"/var/huiwei/libamr_enc.so"
 
 static  void *pamrenc_lib = NULL;
 
@@ -129,7 +130,7 @@ static Decoder_Interface_exit_pfun  Decoder_Interface_exit_amr = NULL;
 static Decoder_Interface_Decode_pfun  Decoder_Interface_Decode_amr = NULL;
 
 
-#define	 AMR_DEC_LIB		"../amr_lib/libamr_dec.so"
+#define	 AMR_DEC_LIB		"/var/huiwei/libamr_dec.so"
 static  void *pamrdec_lib = NULL;
 
 
@@ -223,4 +224,6 @@ void Decoder_Interface_Decode(void* state, const unsigned char* in, short* out, 
 	}
 	Decoder_Interface_Decode_amr(state, in, out, bfi);
 }
+
+
 

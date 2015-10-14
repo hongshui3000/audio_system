@@ -3,10 +3,13 @@
 #include<stdlib.h>
 #include<unistd.h>
 #include<sys/types.h>
+#include <pthread.h>
 #include "common.h"
 #include "amr_loadlib.h"
 #include "amr_encode.h"
 #include "amr_decode.h"
+#include "pcm_dev.h"
+
 
 
 
@@ -18,7 +21,7 @@
 
 
 
-#if 1
+#if 0
 
 FILE * pout_file = NULL;
 void * amrtopcm(void * arg,unsigned int length,void * user)
@@ -144,7 +147,7 @@ int main(void)
 
 
 
-#if 0
+#if 1
 	amr_file_pcmtoamr(new_handle,pcmtoamr,NULL,"./hellotest_pcm_back");
 #else
 	FILE * open_file = fopen("./hellotest_pcm_back","r");
@@ -168,6 +171,100 @@ int main(void)
 	return 0;
 }
 	
+
+
+#endif
+
+
+
+#if 1
+
+
+
+static void playback_1c_to_2c(unsigned char dest[], unsigned char src[],int size)
+										
+{
+	int j;
+
+	for (j = 0; j < size / 2; j++) {
+		dest[j * 4] = *(src + j * 2);
+		dest[j * 4 + 1] = *(src + j * 2 + 1);
+		dest[j * 4 + 2] = *(src + j * 2);
+		dest[j * 4 + 3] = *(src + j * 2 + 1);
+	}
+}
+
+
+
+int main(void)
+{
+
+
+#if 0
+	int ret = -1;
+	ret = adc_open_dev();
+	if(ret != 0)
+	{
+		dbg_printf("adc_open_dev fail ! \n");
+		return(-1);
+	}
+
+
+	unsigned int read_length = 0;
+	unsigned int length_temp = 0;
+	FILE * adc_dev_test_pcm = NULL;
+	adc_dev_test_pcm = fopen("./pcm_adc.pcm","w+");  /*这里是8000采样，但在pc上播放的时候要用11025hz进行播放测试*/
+	if(NULL == adc_dev_test_pcm)
+	{
+		dbg_printf("open fail ! \n");
+		return(-2);
+	}
+	adc_user_t * user = (adc_user_t*)adc_new_user(1,16,8000);
+	
+	unsigned char buff[320];
+	while(read_length < 1024*100 )
+	{
+		length_temp = adc_read_data(user,buff,320);
+		dbg_printf("the read length is %d  \n",length_temp);
+		read_length += length_temp;
+		fwrite(buff,1,length_temp,adc_dev_test_pcm);
+
+	}
+	fclose(adc_dev_test_pcm);
+
+#else
+
+
+	int ret = -1;
+	ret = dac_open_dev();
+	dac_user_t * user = (dac_user_t*)dac_new_user(2,16,11025/*8000*/);
+	unsigned int read_length = 0;
+	unsigned int length_temp = 0;
+	FILE * dac_dev_test_pcm = NULL;
+	dac_dev_test_pcm = fopen("./pcm_adc.pcm","r");
+	if(NULL == dac_dev_test_pcm)
+	{
+		dbg_printf("open fail ! \n");
+		return(-2);
+	}
+
+	unsigned char buff[1024];
+	unsigned char raw_buff[1024*2];
+	speaker_enable(1);
+	while( ! feof(dac_dev_test_pcm))
+	{
+		length_temp = fread(buff,1,1024,dac_dev_test_pcm);
+		playback_1c_to_2c(raw_buff,buff,length_temp);
+		dac_write_data(user,raw_buff,length_temp*2);
+	}
+	speaker_enable(0);
+
+	dbg_printf("open succed ! \n");
+
+	
+	return(0);
+}
+
 
 
 #endif

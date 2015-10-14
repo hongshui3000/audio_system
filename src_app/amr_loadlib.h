@@ -30,6 +30,9 @@ void Decoder_Interface_Decode(void* state, const unsigned char* in, short* out, 
 
 
 
+int huiwei_audiofilterlib_init(void);
+
+
 
 #endif  /*_loadlib_h*/
 
