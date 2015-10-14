@@ -1,9 +1,9 @@
 
 
-#CC = arm-none-linux-gnueabi-gcc
+CC = arm-none-linux-gnueabi-gcc
 
 
-CC = gcc
+#CC = gcc
 
 
 
