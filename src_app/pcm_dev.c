@@ -441,7 +441,7 @@ static int dac_config_default(dac_handle_t * handle)
 }
 
 
-static int dac_config_review(dac_user_t * puser)
+int dac_config_review(dac_user_t * puser)
 {
 
 	int ret = -1;
@@ -598,6 +598,7 @@ int dac_write_data(dac_user_t * puser,unsigned char *buff, unsigned int length)
 	}
 
 
+#if 0
 	if(puser != pdac_handle->cur_user)
 	{
 		ret = dac_config_review(puser);
@@ -609,6 +610,7 @@ int dac_write_data(dac_user_t * puser,unsigned char *buff, unsigned int length)
 		pdac_handle->cur_user = puser;
 
 	}
+#endif
 
 	read_length = write(puser->dac_dev_fd,buff,length);
 	

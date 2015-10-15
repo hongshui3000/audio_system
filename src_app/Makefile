@@ -19,6 +19,8 @@ LOCAL_DEV_SRC := \
     	$(LOCAL_SRC)/amr_decode.c	\
     	$(LOCAL_SRC)/amr_encode.c	\
     	$(LOCAL_SRC)/pcm_dev.c		\
+    	$(LOCAL_SRC)/mp3_decode.c	\
+    	$(LOCAL_SRC)/mp3_loadlib.c	\
         $(LOCAL_SRC)/main.c 
 
 

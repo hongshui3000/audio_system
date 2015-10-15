@@ -46,6 +46,7 @@ int dac_open_dev(void);
 int dac_close_dev(void);
 void * dac_new_user(unsigned char channels,unsigned int bitsPerSample,unsigned int sample_rate);
 void dac_free_user(dac_user_t * user);
+int dac_config_review(dac_user_t * puser);
 int dac_write_data(dac_user_t * puser,unsigned char *buff, unsigned int length);
 int speaker_enable(int value);
 

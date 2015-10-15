@@ -1,14 +1,18 @@
 #include<stdio.h>
 #include<fcntl.h>
-#include<stdlib.h>
-#include<unistd.h>
-#include<sys/types.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include "common.h"
 #include "amr_loadlib.h"
 #include "amr_encode.h"
 #include "amr_decode.h"
 #include "pcm_dev.h"
+#include "mp3_decode.h"
+#include "queue.h"
 
 
 
@@ -177,7 +181,7 @@ int main(void)
 
 
 
-#if 1
+#if 0
 
 
 
@@ -261,7 +265,735 @@ int main(void)
 
 	dbg_printf("open succed ! \n");
 
+#endif
+	return(0);
+}
+
+
+
+#endif
+
+
+
+#if 1
+
+#define  compare_and_swap(lock,old,set)		__sync_bool_compare_and_swap(lock,old,set)
+#define  fetch_and_add(value,add)			__sync_fetch_and_add(value,add)
+#define	 fetch_and_sub(value,sub)			__sync_fetch_and_sub(value,sub)	
+
+#define	 FILE_MAX_NUM			(100)
+
+typedef struct ring_queue
+{
+	void **data;
+	char *flags;
+	unsigned int size;
+	unsigned int num;
+	unsigned int head;
+	unsigned int tail;
+
+} ring_queue_t;
+
+
+typedef  enum 
+{
+	SPEAKER = 1,
+	PCM_FILE,
+	PCM_STREAM,
+	MP3_FILE,
+	AMR_FILE,
+	AMR_STREAM,
+	UNKNOW_ITEM_TYPE,
 	
+}item_type;
+
+
+typedef struct spk_data
+{
+	unsigned int sample_rate;
+	unsigned int data_length;
+	unsigned char data[0];
+}spk_data_t;
+
+typedef  enum 
+{
+	PCM_FILE_TYPE =1,
+	MP3_FILE_TYPE,
+	AMR_FILE_TYPE,
+	UNKNOW_FILE_TYPE
+	
+}file_type_m;
+
+struct file_node
+{
+    char * file_name;
+	file_type_m type;
+    TAILQ_ENTRY(file_node) links; 
+};
+
+typedef  struct voice_files
+{
+	volatile unsigned int num;
+	pthread_mutex_t     mutex;
+	TAILQ_HEAD(,file_node)file_queue;
+}voice_files_t;
+
+
+
+typedef struct voice_handle
+{
+
+	pthread_mutex_t mutex_spk;
+	pthread_cond_t cond_spk;
+	ring_queue_t spk_msg_queue;
+    volatile unsigned int spk_msg_num;
+
+	pthread_mutex_t mutex_file;
+	pthread_cond_t cond_file;
+    volatile unsigned int file_msg_num;
+	voice_files_t * pvoice_file;
+
+	
+	void * da_user;
+	amr_decode_handle_t * pamr_decode_handle;
+	mp3_handle_t * pmp3_decode_handle;
+
+
+	item_type which_item;
+	
+}voice_handle_t;
+
+
+
+static voice_handle_t *  pvoice_center = NULL;
+
+
+static int ring_queue_init(ring_queue_t *queue, int buffer_size)
+{
+    queue->size = buffer_size;
+    queue->flags = (char *)calloc(1,queue->size);
+    if (queue->flags == NULL)
+    {
+        return -1;
+    }
+    queue->data = (void **)calloc(queue->size, sizeof(void*));
+    if (queue->data == NULL)
+    {
+        free(queue->flags);
+        return -1;
+    }
+    queue->head = 0;
+    queue->tail = 0;
+    memset(queue->flags, 0, queue->size);
+    memset(queue->data, 0, queue->size * sizeof(void*));
+    return 0;
+}
+
+
+
+static int ring_queue_push(ring_queue_t *queue, void * ele)
+{
+    if (!(queue->num < queue->size))
+    {
+        return -1;
+    }
+    int cur_tail_index = queue->tail;
+    char * cur_tail_flag_index = queue->flags + cur_tail_index; 
+    while (!compare_and_swap(cur_tail_flag_index, 0, 1))
+    {
+        cur_tail_index = queue->tail;
+        cur_tail_flag_index = queue->flags + cur_tail_index;
+    }
+
+    int update_tail_index = (cur_tail_index + 1) % queue->size;
+	
+    compare_and_swap(&queue->tail, cur_tail_index, update_tail_index);
+    *(queue->data + cur_tail_index) = ele;
+	
+    fetch_and_add(cur_tail_flag_index, 1); 
+    fetch_and_add(&queue->num, 1);
+    return 0;
+}
+
+
+static int  ring_queue_pop(ring_queue_t *queue, void **ele)
+{
+    if (!(queue->num > 0))
+        return -1;
+    int cur_head_index = queue->head;
+    char * cur_head_flag_index = queue->flags + cur_head_index;
+
+    while (!compare_and_swap(cur_head_flag_index, 2, 3)) 
+    {
+        cur_head_index = queue->head;
+        cur_head_flag_index = queue->flags + cur_head_index;
+    }
+
+    int update_head_index = (cur_head_index + 1) % queue->size;
+    compare_and_swap(&queue->head, cur_head_index, update_head_index);
+    *ele = *(queue->data + cur_head_index);
+	
+    fetch_and_sub(cur_head_flag_index, 3);
+    fetch_and_sub(&queue->num, 1);
+    return 0;
+}
+
+
+static void playback_1c_to_2c(unsigned char dest[], unsigned char src[],int size)
+										
+{
+	int j;
+
+	for (j = 0; j < size / 2; j++) {
+		dest[j * 4] = *(src + j * 2);
+		dest[j * 4 + 1] = *(src + j * 2 + 1);
+		dest[j * 4 + 2] = *(src + j * 2);
+		dest[j * 4 + 3] = *(src + j * 2 + 1);
+	}
+}
+
+
+
+
+int voice_push_file(voice_handle_t * factory,const unsigned char * path,file_type_m type)
+{
+
+	
+	if(NULL == path || NULL == factory || NULL == factory->pvoice_file )
+	{
+		dbg_printf("the file is not exit ! \n");
+		return(-1);
+	}
+
+	
+	if(factory->pvoice_file->num >= FILE_MAX_NUM)
+	{
+		dbg_printf("out of the limit ! \n");
+		return(-2);
+	}
+	
+
+	struct file_node * pfile = calloc(1,sizeof(*pfile));
+	if(NULL == pfile)
+	{
+		dbg_printf("the file is not exit ! \n");
+		return(-2);
+	}
+	pfile->type = type;
+
+	asprintf(&pfile->file_name,"%s",path);
+
+	pthread_mutex_lock(&factory->pvoice_file->mutex);
+	
+	TAILQ_INSERT_TAIL(&factory->pvoice_file->file_queue,pfile,links);
+	factory->pvoice_file->num += 1;
+	pthread_mutex_unlock(&factory->pvoice_file->mutex);
+
+	volatile unsigned int *task_num = &factory->file_msg_num;
+	fetch_and_add(task_num, 1);
+	pthread_cond_signal(&(factory->cond_file));
+	
+	return (0);
+}
+
+
+static void * voice_pop_file(voice_handle_t * factory)
+{
+
+	
+	if(NULL == factory || NULL == factory->pvoice_file )
+	{
+		dbg_printf("check the param \n");
+		return(NULL);
+	}
+
+	struct file_node * pfile = NULL;
+	pthread_mutex_lock(&factory->pvoice_file->mutex);
+	pfile =  TAILQ_FIRST(&factory->pvoice_file->file_queue);
+	if(NULL == pfile)
+	{
+		pthread_mutex_unlock(&factory->pvoice_file->mutex);
+		return(NULL);
+	}
+
+	factory->pvoice_file->num -= 1;
+	TAILQ_REMOVE(&factory->pvoice_file->file_queue,pfile,links);
+	pthread_mutex_unlock(&factory->pvoice_file->mutex);
+
+	volatile unsigned int *handle_num = &(factory->file_msg_num);
+	fetch_and_sub(handle_num, 1);  
+	return(pfile);
+
+}
+
+
+
+static int  voice_push_spk(voice_handle_t * factory,void * data )
+{
+
+	int ret = 1;
+	int i = 0;
+	if(NULL ==factory ||  NULL==data)
+	{
+		dbg_printf("check the param ! \n");
+		return(-1);
+
+	}
+
+	pthread_mutex_lock(&(factory->mutex_spk));
+
+	for (i = 0; i < 1000; i++)
+	{
+	    ret = ring_queue_push(&factory->spk_msg_queue, data);
+	    if (ret < 0)
+	    {
+	        usleep(i);
+	        continue;
+	    }
+	    else
+	    {
+	        break;
+	    }	
+	}
+    if (ret < 0)
+    {
+		pthread_mutex_unlock(&(factory->mutex_spk));
+		return (-2);
+    }
+    else
+    {
+		volatile unsigned int *task_num = &factory->spk_msg_num;
+    	fetch_and_add(task_num, 1);
+    }
+
+    pthread_mutex_unlock(&(factory->mutex_spk));
+	pthread_cond_signal(&(factory->cond_spk));
+	
+	return(0);
+}
+
+
+static void * amrtopcm(void * arg,unsigned int length,void * user)
+{
+
+	voice_handle_t * factory = (voice_handle_t*)user;
+	if(NULL == factory || NULL == arg || 0 == length)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	spk_data_t * pcm_data = NULL;
+	pcm_data = calloc(1,sizeof(*pcm_data)+length*2);
+	if(NULL == pcm_data)
+	{
+		dbg_printf("calloc fail ! \n");
+		return(NULL);
+	}
+
+	playback_1c_to_2c(pcm_data->data,(unsigned char *)arg,length);
+	pcm_data->data_length = length*2;
+	pcm_data->sample_rate = 9000; /*9000的效果优于8000*/
+
+	voice_push_spk(factory,pcm_data);
+	pcm_data = NULL;
+	
+	return(NULL);
+}
+
+
+static enum mad_flow voice_mp3_input(void *data,struct mad_stream *stream)
+{
+	mp3_handle_t * handle = (mp3_handle_t *)data;
+	if(NULL == handle)
+	{
+		dbg_printf("please check the param ! \n");
+		return(MAD_FLOW_STOP);
+	}
+
+    mp3_node_t *mp3fp = &(handle->node);
+    int ret_code;
+    int unproc_data_size;
+    int copy_size;
+	
+    if(mp3fp->fpos < mp3fp->flen)
+    {
+        unproc_data_size = stream->bufend - stream->next_frame;
+        memcpy(mp3fp->fbuf, mp3fp->fbuf+mp3fp->fbsize-unproc_data_size, unproc_data_size);
+        copy_size = MP3_FRAME_SIZE - unproc_data_size;
+        if(mp3fp->fpos + copy_size > mp3fp->flen)
+        {
+            copy_size = mp3fp->flen - mp3fp->fpos;
+        }
+        fread(mp3fp->fbuf+unproc_data_size, 1, copy_size, mp3fp->fp);
+        mp3fp->fbsize = unproc_data_size + copy_size;
+        mp3fp->fpos += copy_size;
+        mad_stream_buffer(stream, mp3fp->fbuf, mp3fp->fbsize);
+        ret_code = MAD_FLOW_CONTINUE;
+    }
+    else
+    {
+        ret_code = MAD_FLOW_STOP;
+    }
+    return ret_code;
+
+}
+
+
+static enum mad_flow voice_mp3_error(void *data,struct mad_stream *stream,struct mad_frame *frame)
+{
+	dbg_printf("get a bug ! \n");
+    return MAD_FLOW_CONTINUE;
+}
+
+
+static enum mad_flow voice_mp3_output(void *data,struct mad_header const *header,struct mad_pcm *pcm)
+{
+    unsigned int nchannels, nsamples;
+    unsigned int rate;
+    mad_fixed_t const *left_ch, *right_ch;
+    rate = pcm->samplerate;   /*从这里就可以调整pcm的信息*/
+    nchannels = pcm->channels;
+    nsamples = pcm->length;
+    left_ch = pcm->samples[0];
+    right_ch = pcm->samples[1];
+	
+	unsigned char pcm_buff[1024*8];
+	unsigned int  pcm_length = 0;
+    while (nsamples--)
+    {
+        signed int sample;
+        sample = scale(*left_ch++);
+		char sound0;
+		sound0 = (sample >> 0) & 0xff;
+		pcm_buff[pcm_length++] = sound0;
+		sound0 = (sample >> 8) & 0xff;
+	  	pcm_buff[pcm_length++] = sound0;
+        if (nchannels == 2)
+        {
+            sample = scale(*right_ch++);
+			sound0 = (sample >> 0) & 0xff;
+          	pcm_buff[pcm_length++] = sound0;
+			sound0 = (sample >> 8) & 0xff;
+         	pcm_buff[pcm_length++] = sound0;
+        }
+    }
+/*contain_of()*/
+
+	spk_data_t * pcm_data = NULL;
+	pcm_data = calloc(1,sizeof(*pcm_data)+pcm_length);
+	if(NULL == pcm_data)return MAD_FLOW_CONTINUE;
+	memmove(pcm_data->data,pcm_buff,pcm_length);
+	pcm_data->data_length = pcm_length;
+	pcm_data->sample_rate = rate;
+	voice_push_spk(pvoice_center,pcm_data);
+	pcm_data = NULL;
+	
+    return MAD_FLOW_CONTINUE;
+}
+
+
+
+static int voice_play_file(voice_handle_t * factory,struct file_node * node)
+{
+	if(NULL == node || NULL == factory)
+	{
+		dbg_printf("check the param ! \n");
+		return(-1);
+	}
+
+	if(NULL == node->file_name || access(node->file_name,F_OK) != 0)
+	{
+		dbg_printf("the file is not exit ! \n");
+		return(-2);
+
+	}
+
+	if(PCM_FILE_TYPE == node->type)
+	{
+	
+		FILE * file_pcm = NULL;
+		unsigned int read_length = 0;
+		file_pcm = fopen(node->file_name,"r");
+		if(NULL == file_pcm)
+		{
+			dbg_printf("open fail ! \n");
+			return(-3);
+		}
+		unsigned char buff[1024];
+		spk_data_t * pcm_data = NULL;
+		while( ! feof(file_pcm))
+		{
+			read_length = fread(buff,1,1024,file_pcm);
+			if(read_length > 0 )
+			{
+				pcm_data = calloc(1,sizeof(*pcm_data)+read_length*2);
+				playback_1c_to_2c(pcm_data->data,buff,read_length);
+				pcm_data->data_length = read_length * 2;
+				pcm_data->sample_rate = 11025;
+				voice_push_spk(factory,pcm_data);
+				pcm_data = NULL;
+			}
+		}
+		fclose(file_pcm);
+	}
+	else if(MP3_FILE_TYPE == node->type)
+	{
+		if(NULL == factory->pmp3_decode_handle )
+		{
+			dbg_printf("pmp3_decode_handle is null, please check it ! \n");
+			return(-1);
+		}
+		mp3_play(factory->pmp3_decode_handle,node->file_name);	
+	}
+	else if(AMR_FILE_TYPE == node->type)
+	{
+
+		if(NULL == factory->pamr_decode_handle)
+		{
+			dbg_printf("please init the decode mode of amr ! \n");
+			return(-1);
+		}
+		amr_file_amrtopcm(factory->pamr_decode_handle,amrtopcm,factory,node->file_name);
+	}
+	else
+	{
+		dbg_printf("unknow file type ! \n");
+
+	}
+
+
+	return(0);
+}
+
+static void *  voice_file_fun(void * arg)
+{
+	voice_handle_t * factory = (voice_handle_t * )arg;
+	if(NULL == factory)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	voice_files_t * file_queue = (voice_files_t*)(factory->pvoice_file);
+
+	if(NULL == file_queue)
+	{
+		dbg_printf("please init the file_queue ! \n");
+		return(NULL);
+	}
+
+	struct file_node * pfile = NULL;
+	
+	int is_run = 1;
+	while(is_run)
+	{
+        pthread_mutex_lock(&(factory->mutex_file));
+        while (0 == factory->file_msg_num)
+        {
+            pthread_cond_wait(&(factory->cond_file), &(factory->mutex_file));
+        }
+		pfile = voice_pop_file(factory);
+		pthread_mutex_unlock(&(factory->mutex_file));
+		if(NULL == pfile)continue;
+		
+		voice_play_file(factory,pfile);
+		
+		if(NULL != pfile->file_name)
+		{
+			free(pfile->file_name);
+			pfile->file_name = NULL;
+		}
+		free(pfile);
+		pfile = NULL;
+
+	}
+
+	return(NULL);
+
+}
+
+
+static void *  voice_spk_fun(void * arg)
+{
+	voice_handle_t * factory = (voice_handle_t * )arg;
+	if(NULL == factory)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	dac_user_t * pda_user = (dac_user_t * )(factory->da_user);
+	if(NULL == pda_user)
+	{
+		dbg_printf("please init the da handle ! \n");
+		return(NULL);
+	}
+
+	int ret = 0;
+	int i = 0;
+	int is_run = 1;
+	spk_data_t * spkdata = NULL;
+	
+	speaker_enable(1);
+	while(is_run)
+	{
+        pthread_mutex_lock(&(factory->mutex_spk));
+        while (0 == factory->spk_msg_num)
+        {
+            pthread_cond_wait(&(factory->cond_spk), &(factory->mutex_spk));
+        }
+		ret = ring_queue_pop(&(factory->spk_msg_queue), (void **)&spkdata);
+		pthread_mutex_unlock(&(factory->mutex_spk));
+		
+		volatile unsigned int *handle_num = &(factory->spk_msg_num);
+		fetch_and_sub(handle_num, 1);  
+
+		if(ret != 0 || NULL == spkdata)continue;
+
+		if(pda_user->sample_rate  != spkdata->sample_rate )
+		{
+			pda_user->sample_rate = spkdata->sample_rate;
+			dac_config_review(pda_user);
+		}
+		
+		dac_write_data(pda_user,spkdata->data,spkdata->data_length);
+		free(spkdata);
+		spkdata = NULL;
+
+	}
+	speaker_enable(0);
+	return(NULL);
+
+}
+
+
+
+
+static int voice_handle_init(void)
+{
+	int ret = -1;
+
+
+	if(NULL != pvoice_center)
+	{
+		dbg_printf("has been init ! \n");
+		return(-2);
+	}
+
+	pvoice_center = calloc(1,sizeof(*pvoice_center));
+	if(NULL == pvoice_center)
+	{
+		dbg_printf("calloc fail ! \n");
+		return(-2);
+	}
+
+
+	ret = ring_queue_init(&pvoice_center->spk_msg_queue, 1024);
+	if(ret < 0 )
+	{
+		dbg_printf("ring_queue_init  fail \n");
+		return(-3);
+	}
+    pthread_mutex_init(&(pvoice_center->mutex_spk), NULL);
+    pthread_cond_init(&(pvoice_center->cond_spk), NULL);
+	pvoice_center->spk_msg_num = 0;
+
+
+	voice_files_t * new_voice_file = calloc(1,sizeof(*new_voice_file));
+	if(NULL == new_voice_file)
+	{
+		dbg_printf("new_voice_file fail ! \n");
+		return(-4);
+	}
+	new_voice_file->num = 0;
+	pthread_mutex_init(&(new_voice_file->mutex), NULL);
+	TAILQ_INIT(&new_voice_file->file_queue);
+	pvoice_center->pvoice_file = new_voice_file;
+    pthread_mutex_init(&(pvoice_center->mutex_file), NULL);
+    pthread_cond_init(&(pvoice_center->cond_file), NULL);
+	pvoice_center->file_msg_num = 0;
+
+	
+	ret = dac_open_dev();
+	if(ret != 0)
+	{
+		dbg_printf("open the dac dev fail ! \n");
+		return(-5);
+	}
+	pvoice_center->da_user = (dac_user_t*)dac_new_user(2,16,11025);
+
+
+	ret = amr_decodelib_open();
+	if(ret != 0)
+	{
+		dbg_printf("amr_decodelib_open  fail ! \n");
+		return(-6);
+	}
+	pvoice_center->pamr_decode_handle = amr_new_decode(1,16,8000,AMR_MR515_HEADER);
+	if(NULL ==  pvoice_center->pamr_decode_handle)
+	{
+		dbg_printf("amr_new_decode  fail ! \n");
+		return(-7);
+	}
+
+
+	ret = mp3_open_decodelib( );
+	if(0 !=  ret )
+	{
+		dbg_printf("open the mp3  lib fail ! \n");
+		return(-8);
+	}
+	pvoice_center->pmp3_decode_handle = (mp3_handle_t*)mp3_new_handle();
+	if(NULL == pvoice_center->pmp3_decode_handle)
+	{
+		dbg_printf("mp3_new_handle fail ! \n");
+		return(-9);
+	}
+	pvoice_center->pmp3_decode_handle->input = voice_mp3_input;
+	pvoice_center->pmp3_decode_handle->output = voice_mp3_output;
+	pvoice_center->pmp3_decode_handle->error = voice_mp3_error;
+
+	return(0);
+}
+
+
+
+
+int main(void)
+{
+
+	int ret = -1;
+	ret = voice_handle_init();
+	if(ret != 0 )
+	{
+		dbg_printf("voice_handle_init  fail ! \n");
+		return(-1);
+	}
+	
+	pthread_t spk_pthred;
+	pthread_create(&spk_pthred, NULL, voice_spk_fun, pvoice_center);
+	pthread_detach(spk_pthred);
+
+
+	pthread_t file_pthred;
+	pthread_create(&file_pthred, NULL, voice_file_fun, pvoice_center);
+	pthread_detach(file_pthred);
+
+
+	while(1)
+	{	
+
+		voice_push_file(pvoice_center,"/var/huiwei/chinese_wifi_ok.mp3",MP3_FILE_TYPE);
+		//voice_push_file(pvoice_center,"/var/huiwei/hellotest_amr.amr",AMR_FILE_TYPE);
+		//voice_push_file(pvoice_center,"/var/huiwei/pcm_adc.pcm",PCM_FILE_TYPE);
+		
+		sleep(10);
+		dbg_printf("this is main loop ! \n");
+
+
+	}
+
 	return(0);
 }
 
