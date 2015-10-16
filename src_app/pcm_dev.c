@@ -328,6 +328,7 @@ int adc_read_data(adc_user_t * puser,unsigned char *buff, unsigned int length)
 	}
 
 
+#if 0
 	if(puser != padc_handle->cur_user)
 	{
 		ret = adc_config_review(puser);
@@ -339,6 +340,7 @@ int adc_read_data(adc_user_t * puser,unsigned char *buff, unsigned int length)
 		padc_handle->cur_user = puser;
 
 	}
+#endif
 
 	
 	read_length = read(puser->adc_dev_fd,buff,length);

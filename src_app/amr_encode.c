@@ -261,7 +261,7 @@ int amr_buff_pcmtoamr(amr_encode_handle_t * encode_handle,pfun_arm_encode fun,vo
 	unsigned char encode_buff[32]; 
 	unsigned int encode_length = 0;
 
-	dbg_printf("frame_szie==%d  read_size==%d  \n",frame_szie,read_size);
+	//dbg_printf("frame_szie==%d  read_size==%d  \n",frame_szie,read_size);
 
 	if(8 == encode_handle->bitsPerSample && 1 == encode_handle->channels )
 	{

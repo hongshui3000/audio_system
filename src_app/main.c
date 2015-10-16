@@ -65,7 +65,7 @@ int main(void)
 
 
 
-	pout_file = fopen("./hello_new_test_pcm","w+");
+	pout_file = fopen("/tmp/hello_new_test_pcm","w+");
 	if(NULL == pout_file)
 	{
 		dbg_printf("open fail ! \n");
@@ -73,7 +73,7 @@ int main(void)
 
 	}
 #if 1
-	amr_file_amrtopcm(new_handle,amrtopcm,pout_file,"./test.amr");
+	amr_file_amrtopcm(new_handle,amrtopcm,pout_file,"/tmp/666666.amr");
 #else
 
 	unsigned char amr_buff[1024*2];
@@ -140,7 +140,7 @@ int main(void)
 	}
 
 	
-	pout_file = fopen("./hellotest_amr.amr","w+");
+	pout_file = fopen("/tmp/777777_amr.amr","w+");
 	if(NULL == pout_file)
 	{
 		dbg_printf("open fail ! \n");
@@ -151,10 +151,13 @@ int main(void)
 
 
 
-#if 1
+#if 0
 	amr_file_pcmtoamr(new_handle,pcmtoamr,NULL,"./hellotest_pcm_back");
 #else
-	FILE * open_file = fopen("./hellotest_pcm_back","r");
+//	FILE * open_file = fopen("./hellotest_pcm_back","r");
+	FILE * open_file = fopen("/tmp/666666.pcm","r");
+
+
 	if(NULL == open_file)
 	{
 		dbg_printf("open the file fail ! \n");
@@ -204,7 +207,7 @@ int main(void)
 {
 
 
-#if 0
+#if 1
 	int ret = -1;
 	ret = adc_open_dev();
 	if(ret != 0)
@@ -217,7 +220,7 @@ int main(void)
 	unsigned int read_length = 0;
 	unsigned int length_temp = 0;
 	FILE * adc_dev_test_pcm = NULL;
-	adc_dev_test_pcm = fopen("./pcm_adc.pcm","w+");  /*这里是8000采样，但在pc上播放的时候要用11025hz进行播放测试*/
+	adc_dev_test_pcm = fopen("./9999999.pcm","w+");  /*这里是8000采样，但在pc上播放的时候要用11025hz进行播放测试*/
 	if(NULL == adc_dev_test_pcm)
 	{
 		dbg_printf("open fail ! \n");
@@ -353,9 +356,15 @@ typedef struct voice_handle
     volatile unsigned int file_msg_num;
 	voice_files_t * pvoice_file;
 
+	pthread_mutex_t mutex_mic;
+	pthread_cond_t cond_mic;
+    volatile unsigned int mic_run;
+	
 	
 	void * da_user;
+	void * ad_user;
 	amr_decode_handle_t * pamr_decode_handle;
+	amr_encode_handle_t * pamr_encode_handle;
 	mp3_handle_t * pmp3_decode_handle;
 
 
@@ -602,6 +611,64 @@ static void * amrtopcm(void * arg,unsigned int length,void * user)
 }
 
 
+
+static void * voice_amrtopcm(void * arg,unsigned int length,void * user)
+{
+
+	voice_handle_t * factory = (voice_handle_t*)user;
+	if(NULL == factory || NULL == arg || 0 == length)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	spk_data_t * pcm_data = NULL;
+	pcm_data = calloc(1,sizeof(*pcm_data)+length*2);
+	if(NULL == pcm_data)
+	{
+		dbg_printf("calloc fail ! \n");
+		return(NULL);
+	}
+
+	playback_1c_to_2c(pcm_data->data,(unsigned char *)arg,length);
+	pcm_data->data_length = length*2;
+	pcm_data->sample_rate = 8000; /*9000的效果优于8000*/
+
+	voice_push_spk(factory,pcm_data);
+	pcm_data = NULL;
+
+
+
+	return(NULL);
+}
+
+
+
+static void * voice_pcmtoamr(void * data,unsigned int length,void * user)
+{
+
+
+	voice_handle_t * factory = (voice_handle_t*)user;
+	if(NULL == factory || NULL == data || 0 == length)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	if(NULL == factory->pamr_decode_handle)
+	{
+		dbg_printf("check the pamr decode handle ! \n");
+		return(NULL);
+	}
+	
+	amr_buff_amrtopcm(factory->pamr_decode_handle,voice_amrtopcm,factory,data,length);	
+
+
+	return(NULL);
+}
+
+
+
 static enum mad_flow voice_mp3_input(void *data,struct mad_stream *stream)
 {
 	mp3_handle_t * handle = (mp3_handle_t *)data;
@@ -814,6 +881,97 @@ static void *  voice_file_fun(void * arg)
 }
 
 
+
+
+static int voice_run_mic(voice_handle_t * factory)
+{
+	if(NULL == factory || NULL == factory->ad_user )
+	{
+		dbg_printf("check the param ! \n");
+		return(-1);
+	}
+	volatile  unsigned int * flag = &(factory->mic_run);
+	compare_and_swap(flag, 0, 1);
+	pthread_cond_signal(&(factory->cond_mic));
+	return(0);
+}
+
+
+
+static int voice_stop_mic(voice_handle_t * factory)
+{
+	if(NULL == factory || NULL == factory->ad_user )
+	{
+		dbg_printf("check the param ! \n");
+		return(-1);
+	}
+	volatile  unsigned int * flag = &(factory->mic_run);
+	compare_and_swap(flag, 1, 0);
+
+	return(0);
+}
+
+
+static void *  voice_mic_fun(void * arg)
+{
+	voice_handle_t * factory = (voice_handle_t * )arg;
+	if(NULL == factory)
+	{
+		dbg_printf("please check the param ! \n");
+		return(NULL);
+	}
+
+	adc_user_t * pad_user = (adc_user_t*)(factory->ad_user);
+	if(NULL == pad_user)
+	{
+		dbg_printf("please init the ad modual ! \n");
+		return(NULL);
+	}
+	
+	amr_encode_handle_t * amr_ecode = (amr_encode_handle_t*)(factory->pamr_encode_handle);
+	if(NULL == amr_ecode)
+	{
+		dbg_printf("please init the amr encode modual ! \n");
+		return(NULL);
+	}
+
+
+	unsigned int frame_szie = 0;
+	unsigned int read_size = 0;
+	frame_szie = amr_ecode->sample_rate / 50;
+	read_size = frame_szie * amr_ecode->channels * (amr_ecode->bitsPerSample/8);
+
+	int is_run = 1;
+	unsigned char pcm_buff[read_size];
+
+	unsigned int  real_read_length = 0;
+
+	spk_data_t * pcm_data = NULL;
+
+
+	
+	while(is_run)
+	{
+        pthread_mutex_lock(&(factory->mutex_mic));
+        while (0 == factory->mic_run)
+        {
+            pthread_cond_wait(&(factory->cond_mic), &(factory->mutex_mic));
+        }
+		pthread_mutex_unlock(&(factory->mutex_mic));
+		real_read_length = adc_read_data(pad_user,pcm_buff,read_size);
+		if(real_read_length > 0 )
+		{
+			amr_buff_pcmtoamr(amr_ecode,voice_pcmtoamr,factory,pcm_buff,real_read_length);
+		}
+		
+		
+	}
+
+	return(NULL);
+
+}
+
+
 static void *  voice_spk_fun(void * arg)
 {
 	voice_handle_t * factory = (voice_handle_t * )arg;
@@ -914,6 +1072,12 @@ static int voice_handle_init(void)
     pthread_cond_init(&(pvoice_center->cond_file), NULL);
 	pvoice_center->file_msg_num = 0;
 
+
+    pthread_mutex_init(&(pvoice_center->mutex_mic), NULL);
+    pthread_cond_init(&(pvoice_center->cond_mic), NULL);
+	pvoice_center->mic_run= 0;
+	
+	
 	
 	ret = dac_open_dev();
 	if(ret != 0)
@@ -922,6 +1086,19 @@ static int voice_handle_init(void)
 		return(-5);
 	}
 	pvoice_center->da_user = (dac_user_t*)dac_new_user(2,16,11025);
+
+	ret = adc_open_dev();
+	if(ret != 0)
+	{
+		dbg_printf("adc_open_dev fail ! \n");
+		return(-6);
+	}
+	pvoice_center->ad_user = (adc_user_t*)adc_new_user(1,16,8000);
+	if(NULL == pvoice_center->ad_user)
+	{
+		dbg_printf("adc_new_user fail ! \n");
+		return(-7);
+	}
 
 
 	ret = amr_decodelib_open();
@@ -937,6 +1114,18 @@ static int voice_handle_init(void)
 		return(-7);
 	}
 
+	ret = amr_encodelib_open();
+	if(ret != 0)
+	{
+		dbg_printf("amr_encodelib_open  fail ! \n");
+		return(-8);
+	}
+	pvoice_center->pamr_encode_handle = amr_new_encode(1,16,8000,AMR_MR515);
+	if(NULL == pvoice_center->pamr_encode_handle)
+	{
+		dbg_printf("pvoice_center->pamr_encode_handle fail ! \n");
+		return(-9);
+	}
 
 	ret = mp3_open_decodelib( );
 	if(0 !=  ret )
@@ -980,11 +1169,17 @@ int main(void)
 	pthread_create(&file_pthred, NULL, voice_file_fun, pvoice_center);
 	pthread_detach(file_pthred);
 
+	pthread_t mic_pthred;
+	pthread_create(&mic_pthred, NULL, voice_mic_fun, pvoice_center);
+	pthread_detach(mic_pthred);
+
+	sleep(1);
+	voice_run_mic(pvoice_center);
 
 	while(1)
 	{	
 
-		voice_push_file(pvoice_center,"/var/huiwei/chinese_wifi_ok.mp3",MP3_FILE_TYPE);
+		//voice_push_file(pvoice_center,"/var/huiwei/chinese_wifi_ok.mp3",MP3_FILE_TYPE);
 		//voice_push_file(pvoice_center,"/var/huiwei/hellotest_amr.amr",AMR_FILE_TYPE);
 		//voice_push_file(pvoice_center,"/var/huiwei/pcm_adc.pcm",PCM_FILE_TYPE);
 		
