@@ -73,7 +73,7 @@ int main(void)
 
 	}
 #if 1
-	amr_file_amrtopcm(new_handle,amrtopcm,pout_file,"/tmp/666666.amr");
+	amr_file_amrtopcm(new_handle,amrtopcm,pout_file,"/var/huiwei/test.amr");
 #else
 
 	unsigned char amr_buff[1024*2];
@@ -140,7 +140,7 @@ int main(void)
 	}
 
 	
-	pout_file = fopen("/tmp/777777_amr.amr","w+");
+	pout_file = fopen("/tmp/88888888_amr.amr","w+");
 	if(NULL == pout_file)
 	{
 		dbg_printf("open fail ! \n");
@@ -151,11 +151,11 @@ int main(void)
 
 
 
-#if 0
-	amr_file_pcmtoamr(new_handle,pcmtoamr,NULL,"./hellotest_pcm_back");
+#if 1
+	amr_file_pcmtoamr(new_handle,pcmtoamr,NULL,"/tmp/9999999.pcm");
 #else
 //	FILE * open_file = fopen("./hellotest_pcm_back","r");
-	FILE * open_file = fopen("/tmp/666666.pcm","r");
+	FILE * open_file = fopen("/tmp/9999999.pcm","r");
 
 
 	if(NULL == open_file)
@@ -611,10 +611,13 @@ static void * amrtopcm(void * arg,unsigned int length,void * user)
 }
 
 
+FILE * pfile = NULL;
 
+FILE * pfile_last = NULL;
 static void * voice_amrtopcm(void * arg,unsigned int length,void * user)
 {
 
+#if 0
 	voice_handle_t * factory = (voice_handle_t*)user;
 	if(NULL == factory || NULL == arg || 0 == length)
 	{
@@ -632,10 +635,25 @@ static void * voice_amrtopcm(void * arg,unsigned int length,void * user)
 
 	playback_1c_to_2c(pcm_data->data,(unsigned char *)arg,length);
 	pcm_data->data_length = length*2;
-	pcm_data->sample_rate = 8000; /*9000的效果优于8000*/
+	pcm_data->sample_rate = 7000; /*9000的效果优于8000*/
 
 	voice_push_spk(factory,pcm_data);
 	pcm_data = NULL;
+
+#endif
+
+
+	#if 1
+	static unsigned int flag = 0;
+	if(flag == 0 )
+	{
+		flag = 1;
+		pfile_last = fopen("/tmp/9999999.pcm","w+");
+	}
+	fwrite(arg,1,length,pfile_last);
+
+	#endif
+
 
 
 
@@ -938,12 +956,22 @@ static void *  voice_mic_fun(void * arg)
 
 	unsigned int frame_szie = 0;
 	unsigned int read_size = 0;
+	unsigned char is_16bit = 0;
 	frame_szie = amr_ecode->sample_rate / 50;
 	read_size = frame_szie * amr_ecode->channels * (amr_ecode->bitsPerSample/8);
 
+	if( pad_user->sample_rate  == amr_ecode->sample_rate*2 )
+	{
+		read_size *= 2;	
+		is_16bit = 1;
+	}
+
 	int is_run = 1;
 	unsigned char pcm_buff[read_size];
-
+	short raw_buff[read_size/2];
+	
+	unsigned int i = 0;
+	unsigned int count = 0;
 	unsigned int  real_read_length = 0;
 
 	spk_data_t * pcm_data = NULL;
@@ -961,8 +989,25 @@ static void *  voice_mic_fun(void * arg)
 		real_read_length = adc_read_data(pad_user,pcm_buff,read_size);
 		if(real_read_length > 0 )
 		{
-			amr_buff_pcmtoamr(amr_ecode,voice_pcmtoamr,factory,pcm_buff,real_read_length);
-		}
+	
+			if(0x01 == is_16bit)
+			{
+				for(i=0;i<real_read_length; i+=4)
+				{
+					raw_buff[count] =  *(short*)(&pcm_buff[i]);
+					count += 1;
+				}
+				amr_buff_pcmtoamr(amr_ecode,voice_pcmtoamr,factory,(unsigned char *)&raw_buff[0],count*2);
+				count = 0;
+
+			}
+			else
+			{
+				amr_buff_pcmtoamr(amr_ecode,voice_pcmtoamr,factory,pcm_buff,real_read_length);
+
+			}
+
+		}		
 		
 		
 	}
@@ -1085,7 +1130,7 @@ static int voice_handle_init(void)
 		dbg_printf("open the dac dev fail ! \n");
 		return(-5);
 	}
-	pvoice_center->da_user = (dac_user_t*)dac_new_user(2,16,11025);
+	pvoice_center->da_user = (dac_user_t*)dac_new_user(2,16,8000);
 
 	ret = adc_open_dev();
 	if(ret != 0)
@@ -1093,7 +1138,7 @@ static int voice_handle_init(void)
 		dbg_printf("adc_open_dev fail ! \n");
 		return(-6);
 	}
-	pvoice_center->ad_user = (adc_user_t*)adc_new_user(1,16,8000);
+	pvoice_center->ad_user = (adc_user_t*)adc_new_user(1,16,16000);
 	if(NULL == pvoice_center->ad_user)
 	{
 		dbg_printf("adc_new_user fail ! \n");

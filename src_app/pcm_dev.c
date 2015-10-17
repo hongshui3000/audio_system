@@ -81,7 +81,7 @@
 
 
 #define 	ADC_MAX_READ_SIZE	(2048)
-#define		ADC_SAMPLE_RATE		(8000)
+#define		ADC_SAMPLE_RATE		(8000*2)  
 #define		ADC_CHANNELS		(1)
 #define		ADC_SAMPLE_BITs		(16)
 
@@ -132,7 +132,7 @@ static int adc_config_default(adc_handle_t * handle)
 		return(-2);
 	}
 
-	value = 5;
+	value = 7;
 	ret = ioctl(handle->adc_dev_fd, IOC_SET_GAIN, (void *)(&value));
 	if (ret < 0) 
 	{
@@ -140,9 +140,10 @@ static int adc_config_default(adc_handle_t * handle)
 		return(-3);
 	}
 
-	value |= BIT_NR_AGC;
+#if 0
+	value = BIT_NR_AGC;
 	ret = ioctl(handle->adc_dev_fd, IOC_SET_NR_AGC, (void *)&value);
-
+#endif
 	struct akpcm_pars temp;
 	temp.rate = ADC_SAMPLE_RATE;
 	temp.channels = ADC_CHANNELS;
@@ -414,6 +415,8 @@ static int dac_config_default(dac_handle_t * handle)
 		return(-2);
 	}
 
+
+	
 	value = 5;
 	ret = ioctl(handle->dac_dev_fd, IOC_SET_GAIN, (void *)(&value));
 	if (ret < 0) 
@@ -422,7 +425,11 @@ static int dac_config_default(dac_handle_t * handle)
 		return(-3);
 	}
 
-
+#if 0
+	value = BIT_NR_AGC;
+	ret = ioctl(handle->dac_dev_fd, IOC_SET_NR_AGC, (void *)&value);
+#endif
+	
 	struct akpcm_pars temp;
 	temp.rate = DAC_SAMPLE_RATE;
 	temp.channels = DAC_CHANNELS;
