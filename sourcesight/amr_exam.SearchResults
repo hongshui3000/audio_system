@@ -1,3 +1,0 @@
----- scale Matches (2 in 2 files) ----
-Mad.h (z:\learn\jweih\github\audio_system\src_app): * The scale factors are constant as this is not used with SSO.
-Mp3_decode.h (z:\learn\jweih\github\audio_system\src_app):inline signed int scale(mad_fixed_t sample)

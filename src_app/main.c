@@ -327,6 +327,15 @@ typedef  enum
 	
 }file_type_m;
 
+
+
+typedef enum
+{
+	VOLUME_MID = 0x02,
+	VOLUME_MAX = 0x03,
+	VOLUME_UNKNOW,
+}volume_enum_t;
+
 struct file_node
 {
     char * file_name;
@@ -459,6 +468,39 @@ static void playback_1c_to_2c(unsigned char dest[], unsigned char src[],int size
 		dest[j * 4 + 2] = *(src + j * 2);
 		dest[j * 4 + 3] = *(src + j * 2 + 1);
 	}
+}
+
+
+
+static void raise_volume(short * src,unsigned int length,volume_enum_t volume)
+{
+	if(NULL==src && 0== length)
+	{
+		dbg_printf("please check the param ! \n");
+		return;
+	}
+
+	if(VOLUME_MID != volume && VOLUME_MAX != volume)
+	{
+		dbg_printf("not in the limit ! \n");
+		return;
+	}
+
+	#define	UNSHORT_MAX_VALUE		(65535u)
+	int i = 0;
+	unsigned short* pvalue = (unsigned short *)(src);
+	unsigned int temp_value = 0;
+	for(i=0;i<length;++i)
+	{
+		temp_value = (*pvalue * volume);
+		if(temp_value > UNSHORT_MAX_VALUE)
+		{
+			temp_value = UNSHORT_MAX_VALUE;	
+		}
+		*pvalue = temp_value;
+		pvalue += 1;
+	}
+
 }
 
 
@@ -600,6 +642,8 @@ static void * amrtopcm(void * arg,unsigned int length,void * user)
 		return(NULL);
 	}
 
+	raise_volume((unsigned short *)arg,(length+1)/2,VOLUME_MAX);
+	
 	playback_1c_to_2c(pcm_data->data,(unsigned char *)arg,length);
 	pcm_data->data_length = length*2;
 	pcm_data->sample_rate = 7996; 
